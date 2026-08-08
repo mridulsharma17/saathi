@@ -1,16 +1,49 @@
+# IntelliJ / Android Studio
 *.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+.idea/
+.gradle/
+
+# Local configuration
 local.properties
-.gitignore
+
+# Build directories
+/build/
+**/build/
+captures/
+.externalNativeBuild/
+.cxx/
+.kotlin/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.*
+*.env
+
+# Secrets
+apikeys.properties
+secret.properties
+
+# Firebase Admin SDK (Backend only)
+serviceAccountKey.json
+firebase-adminsdk*.json
+
+# Node.js (if backend is inside the same repository)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Generated APKs & Bundles
+*.apk
+*.aab
+
+# Temporary files
+*.tmp
+*.temp
