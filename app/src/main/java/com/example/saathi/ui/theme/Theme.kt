@@ -24,17 +24,17 @@ private val DarkColorScheme = darkColorScheme(
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = PrimaryIndigo,
+    primary = PrimaryPurple,
     onPrimary = Color.White,
-    secondary = SecondaryPurple,
-    onSecondary = Color.White,
-    tertiary = SecondaryPurple,
+    secondary = SecondaryLavender,
+    onSecondary = PrimaryText,
+    tertiary = SuccessGreen,
     background = LightBackground,
     onBackground = PrimaryText,
     surface = LightSurface,
     onSurface = PrimaryText,
-    surfaceVariant = DividerColor,
-    onSurfaceVariant = SecondaryText,
+    surfaceVariant = GoogleButtonBg,
+    onSurfaceVariant = PrimaryText,
     error = ErrorRed,
     outline = DividerColor
 )

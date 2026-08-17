@@ -20,19 +20,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.saathi.ui.theme.ChatGrey
-import com.example.saathi.ui.theme.ChatPurple
-import com.example.saathi.ui.theme.DarkBackground
-import com.example.saathi.ui.theme.AccentPurple
-import com.example.saathi.ui.theme.LightBackground
+import com.example.saathi.ui.theme.*
 import com.example.saathi.data.JourneyMemory
 import com.example.saathi.data.JourneyRepository
+import com.example.saathi.data.MemoryDetector
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -86,9 +85,11 @@ private val httpClient = OkHttpClient.Builder()
     .build()
 
 data class ChatMessage(
+    val id: String = "",
     val senderId: String = "",
     val text: String = "",
-    val timestamp: Long = 0
+    val timestamp: Long = 0,
+    val replyToId: String? = null
 )
 
 data class UnifiedAiResponse(
@@ -106,21 +107,25 @@ fun ChatScreen(isDarkTheme: Boolean) {
     val chatRef = database.getReference("chats").child(userId)
     val contextRef = database.getReference("conversation_context").child(userId)
     val journeyRepo = remember { JourneyRepository() }
+    val memoryDetector = remember { MemoryDetector(database) }
     
     var messages by remember { mutableStateOf(listOf<ChatMessage>()) }
     var inputText by remember { mutableStateOf("") }
     var showMemoryDialog by remember { mutableStateOf(false) }
     var detectedMemory by remember { mutableStateOf<JourneyMemory?>(null) }
     
+    // Message Queue System
+    val messageQueue = remember { Channel<ChatMessage>(Channel.UNLIMITED) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
+    // Observe Chat Messages from Firebase
     DisposableEffect(userId) {
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val newList = mutableListOf<ChatMessage>()
                 snapshot.children.forEach { child ->
-                    val msg = child.getValue(ChatMessage::class.java)
+                    val msg = child.getValue(ChatMessage::class.java)?.copy(id = child.key ?: "")
                     if (msg != null) newList.add(msg)
                 }
                 messages = newList.sortedBy { it.timestamp }
@@ -131,6 +136,33 @@ fun ChatScreen(isDarkTheme: Boolean) {
         }
         chatRef.addValueEventListener(listener)
         onDispose { chatRef.removeEventListener(listener) }
+    }
+
+    // Queue Processor
+    LaunchedEffect(userId) {
+        messageQueue.receiveAsFlow().collect { userMsg ->
+            try {
+                val contextSnapshot = contextRef.get().await()
+                val currentContext = contextSnapshot.value?.toString() ?: DEFAULT_CONTEXT
+                val response = getUnifiedAiResponse(database, userMsg.text, currentContext)
+                
+                val botMsg = ChatMessage(
+                    senderId = "rahi",
+                    text = response.reply,
+                    timestamp = System.currentTimeMillis(),
+                    replyToId = userMsg.id
+                )
+                chatRef.push().setValue(botMsg).await()
+                contextRef.setValue(response.context).await()
+                
+                if (response.journey != null) {
+                    detectedMemory = response.journey.copy(sourceMessage = userMsg.text)
+                    showMemoryDialog = true
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Queue processing error", e)
+            }
+        }
     }
 
     LaunchedEffect(messages.size) {
@@ -153,13 +185,13 @@ fun ChatScreen(isDarkTheme: Boolean) {
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(vertical = 16.dp)
+            contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp)
         ) {
             items(messages) { message ->
                 ChatBubble(
-                    message = message.text,
-                    time = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(message.timestamp)),
-                    isFromMe = message.senderId == userId
+                    message = message,
+                    isFromMe = message.senderId == userId,
+                    allMessages = messages
                 )
             }
         }
@@ -170,35 +202,19 @@ fun ChatScreen(isDarkTheme: Boolean) {
             onSend = {
                 val trimmedText = inputText.trim()
                 if (trimmedText.isNotBlank()) {
-                    val userMsgText = trimmedText
-                    val userMsg = ChatMessage(userId, userMsgText, System.currentTimeMillis())
                     inputText = ""
-                    
                     scope.launch {
                         try {
-                            chatRef.push().setValue(userMsg).await()
-
-                            val contextSnapshot = contextRef.get().await()
-                            val currentContext = contextSnapshot.value?.toString() ?: DEFAULT_CONTEXT
-                            
-                            val response = getUnifiedAiResponse(database, userMsgText, currentContext)
-                            
-                            // 1. Display and Save Reply
-                            val botMsg = ChatMessage("rahi", "${response.reply}\n\n(via ${response.keyUsed})", System.currentTimeMillis())
-                            chatRef.push().setValue(botMsg).await()
-                            
-                            // 2. Update Context
-                            contextRef.setValue(response.context).await()
-                            
-                            // 3. Handle Journey Memory
-                            if (response.journey != null) {
-                                detectedMemory = response.journey.copy(sourceMessage = userMsgText)
-                                showMemoryDialog = true
-                            }
-                            
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed chat cycle", e)
-                        }
+                            val newRef = chatRef.push()
+                            val userMsg = ChatMessage(
+                                id = newRef.key ?: "",
+                                senderId = userId,
+                                text = trimmedText,
+                                timestamp = System.currentTimeMillis()
+                            )
+                            newRef.setValue(userMsg).await()
+                            messageQueue.send(userMsg)
+                        } catch (e: Exception) { }
                     }
                 }
             }
@@ -207,14 +223,12 @@ fun ChatScreen(isDarkTheme: Boolean) {
         if (showMemoryDialog && detectedMemory != null) {
             AlertDialog(
                 onDismissRequest = { showMemoryDialog = false },
-                title = { Text("We found an important memory", color = Color.White) },
+                title = { Text("We found an important memory", color = MaterialTheme.colorScheme.onSurface) },
                 text = {
                     Column {
-                        Text(detectedMemory?.title ?: "", fontWeight = FontWeight.Bold, color = Color.White)
+                        Text(detectedMemory?.title ?: "", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(detectedMemory?.description ?: "", color = Color.White.copy(alpha = 0.8f))
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Category: ${detectedMemory?.category}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text(detectedMemory?.description ?: "", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
                     }
                 },
                 confirmButton = {
@@ -224,7 +238,7 @@ fun ChatScreen(isDarkTheme: Boolean) {
                             showMemoryDialog = false
                         }
                     }) {
-                        Text("Save", color = AccentPurple)
+                        Text("Save", color = PrimaryPurple)
                     }
                 },
                 dismissButton = {
@@ -233,8 +247,7 @@ fun ChatScreen(isDarkTheme: Boolean) {
                     }
                 },
                 containerColor = MaterialTheme.colorScheme.surface,
-                titleContentColor = MaterialTheme.colorScheme.onSurface,
-                textContentColor = MaterialTheme.colorScheme.onSurface
+                shape = RoundedCornerShape(28.dp)
             )
         }
     }
@@ -244,7 +257,7 @@ private suspend fun getUnifiedAiResponse(database: FirebaseDatabase, prompt: Str
     val snapshot = try {
         database.getReference("api_keys").get().await()
     } catch (e: Exception) {
-        return UnifiedAiResponse("System error: Config unreachable.", context, null, "none")
+        return UnifiedAiResponse("System busy.", context, null, "none")
     }
 
     val keysToTry = listOf("gemni_1", "gemni_2", "gemni_3", "grok_1", "grok_2", "grok_3")
@@ -256,7 +269,6 @@ private suspend fun getUnifiedAiResponse(database: FirebaseDatabase, prompt: Str
 
         if (rawResponse != null) {
             try {
-                // Extract JSON block
                 val start = rawResponse.indexOf('{')
                 val end = rawResponse.lastIndexOf('}')
                 val jsonStr = if (start != -1 && end != -1) rawResponse.substring(start, end + 1) else rawResponse
@@ -279,9 +291,7 @@ private suspend fun getUnifiedAiResponse(database: FirebaseDatabase, prompt: Str
                     journey = journey,
                     keyUsed = keyName
                 )
-            } catch (e: Exception) {
-                Log.e(TAG, "Parsing error for $keyName: ${e.message}")
-            }
+            } catch (e: Exception) { }
         }
     }
     return UnifiedAiResponse("All systems busy. Try again?", context, null, "none")
@@ -333,37 +343,91 @@ private suspend fun callOpenRouterUnified(apiKey: String, input: String): String
 }
 
 @Composable
-fun ChatBubble(message: String, time: String, isFromMe: Boolean) {
+fun ChatBubble(
+    message: ChatMessage,
+    isFromMe: Boolean,
+    allMessages: List<ChatMessage>
+) {
     val isDarkTheme = MaterialTheme.colorScheme.background != LightBackground
+    val repliedToMessage = message.replyToId?.let { id -> allMessages.find { it.id == id } }
+    
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isFromMe) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Bottom
     ) {
         if (!isFromMe) {
-            Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(Color.Gray.copy(alpha = 0.3f)), contentAlignment = Alignment.Center) {
-                Text("\u2728", fontSize = 16.sp)
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(PrimaryPurple.copy(alpha = 0.1f)), 
+                contentAlignment = Alignment.Center
+            ) {
+                Text("\u2728", fontSize = 18.sp)
             }
             Spacer(modifier = Modifier.width(8.dp))
         }
-        Surface(
-            color = if (isFromMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = if (isFromMe) 16.dp else 0.dp, bottomEnd = if (isFromMe) 0.dp else 16.dp),
-            shadowElevation = if (isDarkTheme) 0.dp else 1.dp
+        
+        Column(
+            horizontalAlignment = if (isFromMe) Alignment.End else Alignment.Start
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = message, 
-                    color = if (isFromMe) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, 
-                    fontSize = 15.sp
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = time, 
-                    color = (if (isFromMe) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface).copy(alpha = 0.5f), 
-                    fontSize = 10.sp, 
-                    modifier = Modifier.align(Alignment.End)
-                )
+            // "Replying to" context
+            val showTag = remember(message, allMessages) {
+                if (isFromMe || message.replyToId == null) false
+                else {
+                    val uIndex = allMessages.indexOfFirst { it.id == message.replyToId }
+                    val bIndex = allMessages.indexOf(message)
+                    if (uIndex == -1 || bIndex == -1) false
+                    else {
+                        val prevMessageWasUser = uIndex > 0 && allMessages[uIndex - 1].senderId != "rahi"
+                        val anyUserMessageBetween = allMessages.subList(uIndex + 1, bIndex).any { it.senderId != "rahi" }
+                        prevMessageWasUser || anyUserMessageBetween
+                    }
+                }
+            }
+
+            if (repliedToMessage != null && showTag) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.padding(bottom = 4.dp).widthIn(max = 240.dp)
+                ) {
+                    Text(
+                        text = repliedToMessage.text,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+            }
+
+            Surface(
+                color = if (isFromMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                shape = RoundedCornerShape(
+                    topStart = 20.dp, 
+                    topEnd = 20.dp, 
+                    bottomStart = if (isFromMe) 20.dp else 4.dp, 
+                    bottomEnd = if (isFromMe) 4.dp else 20.dp
+                ),
+                shadowElevation = if (isDarkTheme) 0.dp else 0.5.dp
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Text(
+                        text = message.text, 
+                        color = if (isFromMe) Color.White else MaterialTheme.colorScheme.onSurface, 
+                        fontSize = 15.sp,
+                        lineHeight = 22.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(message.timestamp)), 
+                        color = (if (isFromMe) Color.White else MaterialTheme.colorScheme.onSurface).copy(alpha = 0.5f), 
+                        fontSize = 11.sp, 
+                        modifier = Modifier.align(Alignment.End)
+                    )
+                }
             }
         }
     }
@@ -373,37 +437,55 @@ fun ChatBubble(message: String, time: String, isFromMe: Boolean) {
 @Composable
 fun ChatInput(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit) {
     val isDarkTheme = MaterialTheme.colorScheme.background != LightBackground
-    Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxWidth()) {
-        Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Surface(
+        color = MaterialTheme.colorScheme.background, 
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .fillMaxWidth(), 
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             IconButton(
                 onClick = { }, 
-                modifier = Modifier.size(40.dp).background(
-                    if (isDarkTheme) ChatGrey else MaterialTheme.colorScheme.surface, 
-                    CircleShape
-                )
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), 
+                        CircleShape
+                    )
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Add", tint = if (isDarkTheme) Color.White else MaterialTheme.colorScheme.primary)
+                Icon(
+                    Icons.Default.Add, 
+                    contentDescription = "Add", 
+                    tint = MaterialTheme.colorScheme.primary
+                )
             }
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             TextField(
                 value = value, onValueChange = onValueChange,
-                placeholder = { Text("Message Rahi...", color = Color.Gray, fontSize = 14.sp) },
-                modifier = Modifier.weight(1f).heightIn(min = 44.dp, max = 120.dp),
+                placeholder = { Text("Message Rahi...", color = SecondaryText, fontSize = 15.sp) },
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp, max = 150.dp),
                 colors = TextFieldDefaults.colors(
-                    focusedContainerColor = if (isDarkTheme) ChatGrey else MaterialTheme.colorScheme.surface, 
-                    unfocusedContainerColor = if (isDarkTheme) ChatGrey else MaterialTheme.colorScheme.surface, 
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), 
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), 
                     focusedIndicatorColor = Color.Transparent, 
                     unfocusedIndicatorColor = Color.Transparent, 
-                    cursorColor = MaterialTheme.colorScheme.primary, 
+                    cursorColor = MaterialTheme.colorScheme.primary,
                     focusedTextColor = MaterialTheme.colorScheme.onSurface, 
                     unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                 ),
-                shape = RoundedCornerShape(24.dp)
+                shape = RoundedCornerShape(28.dp)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             IconButton(
                 onClick = onSend, 
-                modifier = Modifier.size(44.dp).background(MaterialTheme.colorScheme.primary, CircleShape)
+                modifier = Modifier
+                    .size(48.dp)
+                    .background(PrimaryPurple, CircleShape)
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = Color.White)
             }

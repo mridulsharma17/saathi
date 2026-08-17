@@ -2,6 +2,7 @@ package com.example.saathi.screens
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -18,14 +19,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.saathi.ui.theme.DarkBackground
-import com.example.saathi.ui.theme.DarkSurface
-import com.example.saathi.ui.theme.AccentPurple
-import com.example.saathi.ui.theme.TextGrey
+import com.example.saathi.ui.theme.*
 import com.google.firebase.auth.FirebaseAuth
-
 
 @Composable
 fun SettingsScreen(
@@ -39,25 +37,28 @@ fun SettingsScreen(
     var showSignOutDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
+    val backgroundColor = MaterialTheme.colorScheme.background
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    val onSurfaceColor = MaterialTheme.colorScheme.onSurface
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(if (isDarkTheme) DarkBackground else Color.White)
-            .padding(horizontal = 16.dp),
+            .background(backgroundColor)
+            .padding(horizontal = 20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            Spacer(modifier = Modifier.height(8.dp))
-            ProfileCard(isDarkTheme)
+            Spacer(modifier = Modifier.height(16.dp))
+            ProfileHeader(isDarkTheme)
         }
 
         item {
             SettingsSection(
                 items = listOf(
-                    SettingsItemData("AI Companion", "Rahi", Icons.Default.SmartToy, onClick = { showAiDialog = true }),
-                    SettingsItemData("Appearance", if (isDarkTheme) "Dark" else "Light", Icons.Default.Palette, onClick = onThemeToggle)
-                ),
-                isDarkTheme = isDarkTheme
+                    SettingsItemData("AI Companion", null, Icons.Default.SmartToy, onClick = { showAiDialog = true }),
+                    SettingsItemData("Appearance", null, Icons.Default.Palette, onClick = onThemeToggle)
+                )
             )
         }
 
@@ -66,147 +67,200 @@ fun SettingsScreen(
                 items = listOf(
                     SettingsItemData("Privacy & Data", null, Icons.Default.Lock, onClick = { showPrivacyDialog = true }),
                     SettingsItemData("Export Journey", null, Icons.Default.Download, onClick = { 
-                        Toast.makeText(context, "Exporting your journey data...", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Exporting data...", Toast.LENGTH_SHORT).show()
                     }),
                     SettingsItemData("About Saathi", null, Icons.Default.Info, onClick = { showAboutDialog = true })
-                ),
-                isDarkTheme = isDarkTheme
+                )
             )
         }
 
         item {
-            Button(
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
                 onClick = { showSignOutDialog = true },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Red.copy(alpha = 0.1f)
-                ),
+                color = if (isDarkTheme) Color.Red.copy(alpha = 0.1f) else Color(0xFFFFEBEE),
                 shape = RoundedCornerShape(16.dp),
-                contentPadding = PaddingValues(16.dp)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
+                    modifier = Modifier.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, tint = Color.Red)
+                    Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, tint = Color.Red, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("Sign Out", color = Color.Red, style = MaterialTheme.typography.titleMedium)
+                    Text("Sign Out", color = Color.Red, fontWeight = FontWeight.Bold)
                 }
             }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Version 2.0.1 (${if (isDarkTheme) "Dark" else "Light"})",
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+                color = SecondaryText,
+                fontSize = 12.sp
+            )
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 
-    // Sign Out Confirmation Dialog
     if (showSignOutDialog) {
         AlertDialog(
             onDismissRequest = { showSignOutDialog = false },
-            title = { Text("Sign Out", fontWeight = FontWeight.Bold) },
-            text = { Text("Are you sure you want to log out of Saathi?") },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        showSignOutDialog = false
-                        FirebaseAuth.getInstance().signOut()
-                        val prefs = context.getSharedPreferences("saathi_prefs", android.content.Context.MODE_PRIVATE)
-                        prefs.edit().clear().apply()
-                        onLogout()
+                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Button(
+                        onClick = {
+                            showSignOutDialog = false
+                            FirebaseAuth.getInstance().signOut()
+                            val prefs = context.getSharedPreferences("saathi_prefs", android.content.Context.MODE_PRIVATE)
+                            prefs.edit().clear().apply()
+                            onLogout()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
+                        shape = RoundedCornerShape(24.dp)
+                    ) {
+                        Text("Logout", color = Color.White, fontWeight = FontWeight.Bold)
                     }
-                ) {
-                    Text("Logout", color = Color.Red)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        onClick = { showSignOutDialog = false },
+                        color = if (isDarkTheme) Color.White.copy(alpha = 0.1f) else Color(0xFFEEEEEE),
+                        shape = RoundedCornerShape(24.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            "Cancel",
+                            modifier = Modifier.padding(vertical = 12.dp),
+                            textAlign = TextAlign.Center,
+                            fontWeight = FontWeight.Medium,
+                            color = onSurfaceColor
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
             },
-            dismissButton = {
-                TextButton(onClick = { showSignOutDialog = false }) {
-                    Text("Cancel", color = if (isDarkTheme) Color.White else Color.Black)
+            title = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFFFEBEE)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, tint = Color(0xFFC62828), modifier = Modifier.size(32.dp))
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Sign Out", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                 }
             },
-            containerColor = if (isDarkTheme) DarkSurface else Color.White,
-            titleContentColor = if (isDarkTheme) Color.White else Color.Black,
-            textContentColor = if (isDarkTheme) Color.White.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.8f)
+            text = {
+                Text(
+                    "Are you sure you want to log out of Saathi? We'll be here whenever you're ready to return.",
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            containerColor = surfaceColor,
+            shape = RoundedCornerShape(28.dp)
         )
     }
 
-    // AI Companion Dialog
+    // Reuse other dialogs with theme colors...
     if (showAiDialog) {
         AlertDialog(
             onDismissRequest = { showAiDialog = false },
             title = { Text("AI Companion: Rahi", fontWeight = FontWeight.Bold) },
-            text = {
-                Text("Rahi is powered by advanced AI models including Google's Gemini and OpenRouter. Rahi acts as a close Indian friend who remembers your life events and provides witty, honest, and caring support.")
-            },
-            confirmButton = {
-                TextButton(onClick = { showAiDialog = false }) { Text("Close", color = AccentPurple) }
-            },
-            containerColor = if (isDarkTheme) DarkSurface else Color.White,
-            titleContentColor = if (isDarkTheme) Color.White else Color.Black,
-            textContentColor = if (isDarkTheme) Color.White.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.8f)
-        )
-    }
-
-    // Privacy Dialog
-    if (showPrivacyDialog) {
-        AlertDialog(
-            onDismissRequest = { showPrivacyDialog = false },
-            title = { Text("Privacy & Data", fontWeight = FontWeight.Bold) },
-            text = {
-                Text("Your data is secured using Firebase Authentication. Chats and Journey memories are stored in an encrypted database. We use a rolling context summary (memory) to maintain conversation continuity while protecting your privacy.")
-            },
-            confirmButton = {
-                TextButton(onClick = { showPrivacyDialog = false }) { Text("Understood", color = AccentPurple) }
-            },
-            containerColor = if (isDarkTheme) DarkSurface else Color.White,
-            titleContentColor = if (isDarkTheme) Color.White else Color.Black,
-            textContentColor = if (isDarkTheme) Color.White.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.8f)
-        )
-    }
-
-    // About Dialog
-    if (showAboutDialog) {
-        AlertDialog(
-            onDismissRequest = { showAboutDialog = false },
-            title = { Text("About Saathi", fontWeight = FontWeight.Bold) },
-            text = {
-                Text("Saathi is your AI-powered companion journey. Designed to be your best friend who never forgets your special moments.")
-            },
-            confirmButton = {
-                TextButton(onClick = { showAboutDialog = false }) { Text("OK", color = AccentPurple) }
-            },
-            containerColor = if (isDarkTheme) DarkSurface else Color.White,
-            titleContentColor = if (isDarkTheme) Color.White else Color.Black,
-            textContentColor = if (isDarkTheme) Color.White.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.8f)
+            text = { Text("Rahi is your intelligent friend, powered by Gemini and OpenRouter.") },
+            confirmButton = { TextButton(onClick = { showAiDialog = false }) { Text("Close", color = PrimaryPurple) } },
+            containerColor = surfaceColor
         )
     }
 }
 
 @Composable
-fun ProfileCard(isDarkTheme: Boolean) {
-    Surface(
-        color = if (isDarkTheme) DarkSurface else Color(0xFFF5F5F5),
-        shape = RoundedCornerShape(24.dp),
-        modifier = Modifier.fillMaxWidth()
+fun ProfileHeader(isDarkTheme: Boolean) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Box(contentAlignment = Alignment.BottomEnd) {
+            Box(
+                modifier = Modifier
+                    .size(100.dp)
+                    .clip(CircleShape)
+                    .background(Color.LightGray)
+            ) {
+                // Image placeholder
+            }
+            Surface(
+                modifier = Modifier
+                    .size(28.dp)
+                    .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape),
+                shape = CircleShape,
+                color = Color.White,
+                shadowElevation = 2.dp
+            ) {
+                Icon(Icons.Default.Edit, contentDescription = null, tint = PrimaryPurple, modifier = Modifier.padding(6.dp))
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            "Mridul", 
+            style = MaterialTheme.typography.titleLarge, 
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text("Joined Journey today", color = SecondaryText, fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+fun SettingsSection(items: List<SettingsItemData>) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier.fillMaxWidth(),
+        shadowElevation = 1.dp
+    ) {
+        Column {
+            items.forEachIndexed { index, item ->
+                SettingsItem(item)
+                if (index < (items.size - 1)) {
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = DividerColor)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsItem(item: SettingsItemData) {
+    Surface(
+        onClick = item.onClick,
+        color = Color.Transparent
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(80.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
-                    .background(AccentPurple.copy(alpha = 0.2f)),
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Default.Person, contentDescription = null, tint = AccentPurple, modifier = Modifier.size(40.dp))
+                Icon(item.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
             }
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                "Mridul", 
-                style = MaterialTheme.typography.headlineSmall, 
-                color = if (isDarkTheme) Color.White else Color.Black,
-                fontWeight = FontWeight.Bold
-            )
-            Text("Keep growing, keep going.", color = TextGrey, fontSize = 14.sp)
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.width(16.dp))
+            Text(item.title, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
+            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.LightGray)
         }
     }
 }
@@ -215,57 +269,5 @@ data class SettingsItemData(
     val title: String,
     val value: String?,
     val icon: ImageVector,
-    val hasSwitch: Boolean = false,
-    val onClick: () -> Unit = {}
+    val onClick: () -> Unit
 )
-
-@Composable
-fun SettingsSection(items: List<SettingsItemData>, isDarkTheme: Boolean) {
-    Surface(
-        color = if (isDarkTheme) DarkSurface else Color(0xFFF5F5F5),
-        shape = RoundedCornerShape(24.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column {
-            items.forEachIndexed { index, item ->
-                SettingsItem(item, isDarkTheme)
-                if (index < (items.size - 1)) {
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = Color.Gray.copy(alpha = 0.1f))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SettingsItem(item: SettingsItemData, isDarkTheme: Boolean) {
-    Surface(
-        onClick = item.onClick,
-        color = Color.Transparent,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(item.icon, contentDescription = null, tint = AccentPurple, modifier = Modifier.size(24.dp))
-            Spacer(modifier = Modifier.width(16.dp))
-            Text(item.title, color = if (isDarkTheme) Color.White else Color.Black, modifier = Modifier.weight(1f))
-            if (item.value != null) {
-                Text(item.value, color = TextGrey, fontSize = 14.sp)
-                Spacer(modifier = Modifier.width(8.dp))
-            }
-            if (item.hasSwitch) {
-                Switch(
-                    checked = true,
-                    onCheckedChange = { },
-                    colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentPurple)
-                )
-            } else {
-                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextGrey)
-            }
-        }
-    }
-}

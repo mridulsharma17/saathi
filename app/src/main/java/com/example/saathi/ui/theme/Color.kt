@@ -2,18 +2,19 @@ package com.example.saathi.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Light Theme Palette
-val LightBackground = Color(0xFFF8FAFC)
+// Light Theme Palette (Image-matched)
+val LightBackground = Color(0xFFF8FAFF)
 val LightSurface = Color(0xFFFFFFFF)
-val PrimaryIndigo = Color(0xFF4F46E5)
-val SecondaryPurple = Color(0xFF7C3AED)
+val PrimaryPurple = Color(0xFF6B46D1) // Vibrant Purple from button
+val SecondaryLavender = Color(0xFFE8EAF6)
 val SuccessGreen = Color(0xFF10B981)
 val ErrorRed = Color(0xFFEF4444)
 val PrimaryText = Color(0xFF1E293B)
 val SecondaryText = Color(0xFF64748B)
 val DividerColor = Color(0xFFE2E8F0)
+val GoogleButtonBg = Color(0xFFE8EAF6)
 
-// Dark Theme Palette (Existing)
+// Dark Theme Palette
 val DarkBackground = Color(0xFF050510)
 val DarkSurface = Color(0xFF12132A)
 val DeepPurple = Color(0xFF2A2B4D)

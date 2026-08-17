@@ -111,7 +111,7 @@ class MemoryDetector(private val database: FirebaseDatabase) {
 
     private suspend fun callGeminiApi(apiKey: String, content: String): String? {
         return withContext(Dispatchers.IO) {
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
             val json = JSONObject().apply {
                 put("system_instruction", JSONObject().apply {
                     put("parts", org.json.JSONArray().apply { put(JSONObject().apply { put("text", MEMORY_SYSTEM_PROMPT) }) })
