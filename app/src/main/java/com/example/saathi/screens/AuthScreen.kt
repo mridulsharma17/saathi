@@ -3,18 +3,21 @@ package com.example.saathi.screens
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Eco
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Person
@@ -25,10 +28,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -39,8 +49,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
-import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.saathi.R
 import com.example.saathi.data.OtpRepository
 import com.example.saathi.ui.theme.*
 import com.example.saathi.viewmodel.LoginState
@@ -67,6 +77,29 @@ fun AuthScreen(onAuthComplete: () -> Unit) {
     val scrollState = rememberScrollState()
 
     val loginState by viewModel.loginState.collectAsState()
+    val isDarkTheme = MaterialTheme.colorScheme.background != LightBackground
+
+    val bgGradient = if (isDarkTheme) {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF0F0C1B),
+                Color(0xFF18132B),
+                Color(0xFF0F0C1B)
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFFFAF8FF),
+                Color(0xFFF2ECFC),
+                Color(0xFFFAF8FF)
+            )
+        )
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.resetState()
+    }
 
     LaunchedEffect(loginState) {
         if (loginState is LoginState.Success) {
@@ -80,68 +113,134 @@ fun AuthScreen(onAuthComplete: () -> Unit) {
         }
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(LightBackground)
-            .statusBarsPadding()
-            .verticalScroll(scrollState)
-            .padding(horizontal = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .background(bgGradient)
     ) {
-        Spacer(modifier = Modifier.height(48.dp))
-        
-        // Logo matching Image 2
-        Surface(
-            modifier = Modifier.size(72.dp),
-            shape = RoundedCornerShape(20.dp),
-            color = PrimaryPurple
+        AuthBackgroundCanvas(isDarkTheme = isDarkTheme)
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.Eco, contentDescription = null, tint = Color.White, modifier = Modifier.size(40.dp))
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Logo Header
+            Surface(
+                modifier = Modifier.size(72.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 2.dp,
+                border = BorderStroke(2.dp, PrimaryPurple.copy(alpha = 0.2f))
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Image(
+                        painter = painterResource(id = R.drawable.logo),
+                        contentDescription = "Logo",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(CircleShape)
+                    )
+                }
             }
-        }
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        Text(
-            text = if (isLogin) "Welcome back 👋" else "Create account ✨",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = PrimaryText
-        )
-        Text(
-            text = if (isLogin) "Glad to see you again. Let's continue your journey." else "Start your journey with Saathi today.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = SecondaryText,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 8.dp)
-        )
 
-        Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-        if (isLogin) {
-            LoginContent(
-                onSignUpClick = { isLogin = false },
-                onGoogleSignIn = {
-                    scope.launch {
-                        handleGoogleSignIn(context, auth, database, onAuthComplete)
+            Text(
+                text = "Saarthi AI",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = PrimaryPurple
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Segmented Tab Switcher (Login / Signup)
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        onClick = { isLogin = true },
+                        color = if (isLogin) PrimaryPurple else Color.Transparent,
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = "Login",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = if (isLogin) Color.White else SecondaryText
+                            )
+                        }
+                    }
+
+                    Surface(
+                        onClick = { isLogin = false },
+                        color = if (!isLogin) PrimaryPurple else Color.Transparent,
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = "Sign Up",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = if (!isLogin) Color.White else SecondaryText
+                            )
+                        }
                     }
                 }
-            )
-        } else {
-            SignUpContent(
-                onLoginClick = { isLogin = true },
-                onSignUpSuccess = onAuthComplete,
-                auth = auth,
-                database = database,
-                viewModel = viewModel,
-                onGoogleSignIn = {
-                    scope.launch {
-                        handleGoogleSignIn(context, auth, database, onAuthComplete)
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            if (isLogin) {
+                LoginContent(
+                    viewModel = viewModel,
+                    onSignUpClick = { isLogin = false },
+                    onGoogleSignIn = {
+                        scope.launch {
+                            handleGoogleSignIn(context, auth, database, viewModel, onAuthComplete)
+                        }
                     }
-                }
-            )
+                )
+            } else {
+                SignUpContent(
+                    onLoginClick = { isLogin = true },
+                    onSignUpSuccess = onAuthComplete,
+                    auth = auth,
+                    database = database,
+                    viewModel = viewModel,
+                    onGoogleSignIn = {
+                        scope.launch {
+                            handleGoogleSignIn(context, auth, database, viewModel, onAuthComplete)
+                        }
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
@@ -150,6 +249,7 @@ private suspend fun handleGoogleSignIn(
     context: android.content.Context,
     auth: FirebaseAuth,
     database: FirebaseDatabase,
+    viewModel: LoginViewModel,
     onAuthComplete: () -> Unit
 ) {
     val credentialManager = CredentialManager.create(context)
@@ -182,17 +282,18 @@ private suspend fun handleGoogleSignIn(
                     "uid" to user.uid
                 )
                 database.getReference("users").child(sanitizedEmail).updateChildren(userMap).await()
-                onAuthComplete()
+                viewModel.setSuccess()
             }
         }
     } catch (e: Exception) {
         Log.e(TAG, "Google Sign-In failed", e)
-        Toast.makeText(context, "Google Sign-In failed: ${e.message}", Toast.LENGTH_SHORT).show()
+        viewModel.setError("Google Sign-In failed: ${e.message}")
     }
 }
 
 @Composable
 fun LoginContent(
+    viewModel: LoginViewModel,
     onSignUpClick: () -> Unit,
     onGoogleSignIn: () -> Unit
 ) {
@@ -203,44 +304,48 @@ fun LoginContent(
     val context = LocalContext.current
 
     Surface(
-        color = Color.White,
+        color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(24.dp),
-        shadowElevation = 2.dp,
+        shadowElevation = 1.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(24.dp)) {
-            Text("Email address", fontWeight = FontWeight.Medium, color = PrimaryText, fontSize = 14.sp)
-            Spacer(modifier = Modifier.height(8.dp))
+            Text("Email Address", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+            Spacer(modifier = Modifier.height(6.dp))
             AuthTextField(
                 value = email,
                 onValueChange = { email = it },
                 label = "you@example.com",
-                icon = Icons.Outlined.Email
+                icon = Icons.Outlined.Email,
+                keyboardType = KeyboardType.Email
             )
             
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
             
-            Text("Password", fontWeight = FontWeight.Medium, color = PrimaryText, fontSize = 14.sp)
-            Spacer(modifier = Modifier.height(8.dp))
+            Text("Password", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+            Spacer(modifier = Modifier.height(6.dp))
             AuthTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = "........",
+                label = "••••••••",
                 icon = Icons.Outlined.Lock,
-                isPassword = true
+                isPassword = true,
+                keyboardType = KeyboardType.Password
             )
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = { }) {
-                    Text("Forgot password?", color = PrimaryPurple, fontSize = 14.sp)
+                TextButton(onClick = {
+                    Toast.makeText(context, "Password reset link feature coming soon", Toast.LENGTH_SHORT).show()
+                }) {
+                    Text("Forgot password?", color = PrimaryPurple, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             if (isLoading) {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = PrimaryPurple)
+                Box(modifier = Modifier.fillMaxWidth().height(52.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = PrimaryPurple, modifier = Modifier.size(28.dp))
                 }
             } else {
                 Button(
@@ -254,51 +359,51 @@ fun LoginContent(
                             .addOnCompleteListener { task ->
                                 isLoading = false
                                 if (task.isSuccessful) {
-                                    // Success handled in AuthScreen
+                                    viewModel.setSuccess()
                                 } else {
-                                    Toast.makeText(context, "Login failed", Toast.LENGTH_LONG).show()
+                                    viewModel.setError(task.exception?.message ?: "Login failed")
                                 }
                             }
                     },
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Login", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text("Login", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.White)
                     }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Google Sign-In Button
+            Surface(
+                onClick = onGoogleSignIn,
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+                modifier = Modifier.fillMaxWidth().height(50.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text("Continue with Google 🌐", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 }
             }
         }
     }
 
-    Spacer(modifier = Modifier.height(32.dp))
-    
-    // Google Button matching Image 2
-    Surface(
-        onClick = onGoogleSignIn,
-        color = Color(0xFFE8EAF6),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth().height(56.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            Text("Continue with Google", color = PrimaryPurple, fontWeight = FontWeight.Bold)
-        }
-    }
-
-    Spacer(modifier = Modifier.height(32.dp))
+    Spacer(modifier = Modifier.height(24.dp))
 
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Don't have an account? ", color = SecondaryText)
-        Text("Sign up", color = PrimaryPurple, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onSignUpClick() })
+        Text("Don't have an account? ", color = SecondaryText, fontSize = 14.sp)
+        Text("Sign up", color = PrimaryPurple, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.clickable { onSignUpClick() })
     }
-    Spacer(modifier = Modifier.height(32.dp))
 }
 
 @Composable
@@ -327,31 +432,36 @@ fun SignUpContent(
     }
 
     Surface(
-        color = Color.White,
+        color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(24.dp),
-        shadowElevation = 2.dp,
+        shadowElevation = 1.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(24.dp)) {
             if (!hasSentOtp) {
-                Text("Full name", fontWeight = FontWeight.Medium, color = PrimaryText, fontSize = 14.sp)
+                Text("Full Name", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(6.dp))
                 AuthTextField(value = name, onValueChange = { name = it }, label = "Your Name", icon = Icons.Outlined.Person)
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
                 
-                Text("Email address", fontWeight = FontWeight.Medium, color = PrimaryText, fontSize = 14.sp)
-                AuthTextField(value = email, onValueChange = { email = it }, label = "you@example.com", icon = Icons.Outlined.Email)
-                Spacer(modifier = Modifier.height(16.dp))
+                Text("Email Address", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(6.dp))
+                AuthTextField(value = email, onValueChange = { email = it }, label = "you@example.com", icon = Icons.Outlined.Email, keyboardType = KeyboardType.Email)
+                Spacer(modifier = Modifier.height(14.dp))
                 
-                Text("Password", fontWeight = FontWeight.Medium, color = PrimaryText, fontSize = 14.sp)
-                AuthTextField(value = password, onValueChange = { password = it }, label = "........", icon = Icons.Outlined.Lock, isPassword = true)
-                Spacer(modifier = Modifier.height(16.dp))
+                Text("Password", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(6.dp))
+                AuthTextField(value = password, onValueChange = { password = it }, label = "••••••••", icon = Icons.Outlined.Lock, isPassword = true, keyboardType = KeyboardType.Password)
+                Spacer(modifier = Modifier.height(14.dp))
                 
-                Text("Confirm password", fontWeight = FontWeight.Medium, color = PrimaryText, fontSize = 14.sp)
-                AuthTextField(value = confirmPassword, onValueChange = { confirmPassword = it }, label = "........", icon = Icons.Outlined.Lock, isPassword = true)
+                Text("Confirm Password", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(6.dp))
+                AuthTextField(value = confirmPassword, onValueChange = { confirmPassword = it }, label = "••••••••", icon = Icons.Outlined.Lock, isPassword = true, keyboardType = KeyboardType.Password)
             } else {
-                Text("Verify your email", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("We've sent a 6-digit code to $email", color = SecondaryText, fontSize = 14.sp)
-                Spacer(modifier = Modifier.height(24.dp))
+                Text("Verify Your Email ✉️", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("We've sent a 6-digit verification code to $email", color = SecondaryText, fontSize = 13.sp, lineHeight = 18.sp)
+                Spacer(modifier = Modifier.height(20.dp))
                 
                 AuthTextField(
                     value = otp,
@@ -362,11 +472,11 @@ fun SignUpContent(
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             if (loginState is LoginState.Loading) {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = PrimaryPurple)
+                Box(modifier = Modifier.fillMaxWidth().height(52.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = PrimaryPurple, modifier = Modifier.size(28.dp))
                 }
             } else {
                 Button(
@@ -374,6 +484,10 @@ fun SignUpContent(
                         if (!hasSentOtp) {
                             if (name.isBlank() || email.isBlank() || password.isBlank()) {
                                 Toast.makeText(context, "Please fill all fields", Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
+                            if (password != confirmPassword) {
+                                Toast.makeText(context, "Passwords do not match", Toast.LENGTH_SHORT).show()
                                 return@Button
                             }
                             viewModel.sendOtp(email.trim())
@@ -398,54 +512,65 @@ fun SignUpContent(
                                                     database.getReference("users").child(sanitizedEmail)
                                                         .setValue(userMap)
                                                         .addOnCompleteListener { dbTask ->
-                                                            if (dbTask.isSuccessful) onSignUpSuccess()
+                                                            if (dbTask.isSuccessful) viewModel.setSuccess()
                                                         }
+                                                } else {
+                                                    viewModel.setError(task.exception?.message ?: "User creation failed")
                                                 }
                                             }
+                                    } else {
+                                        viewModel.setError(verifyResponse.body()?.message ?: "Invalid OTP")
                                     }
-                                } catch (e: Exception) { }
+                                } catch (e: Exception) {
+                                    viewModel.setError(e.message ?: "Verification failed")
+                                }
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
                     shape = RoundedCornerShape(16.dp)
                 ) {
-                    Text(if (hasSentOtp) "Complete Signup" else "Verify Email", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(if (hasSentOtp) "Complete Sign Up" else "Verify Email", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
                 
                 if (hasSentOtp) {
-                    TextButton(onClick = { viewModel.sendOtp(email.trim()) }, enabled = timerValue == 0) {
-                        Text(if (timerValue > 0) "Resend in ${timerValue}s" else "Resend OTP", color = PrimaryPurple)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = { viewModel.sendOtp(email.trim()) }, enabled = timerValue == 0, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (timerValue > 0) "Resend in ${timerValue}s" else "Resend Verification Code", color = PrimaryPurple, fontSize = 13.sp)
+                    }
+                }
+            }
+
+            if (!hasSentOtp) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Google Sign-In Button
+                Surface(
+                    onClick = onGoogleSignIn,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+                    modifier = Modifier.fillMaxWidth().height(50.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text("Continue with Google 🌐", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     }
                 }
             }
         }
     }
 
-    Spacer(modifier = Modifier.height(32.dp))
-    
-    Surface(
-        onClick = onGoogleSignIn,
-        color = Color(0xFFE8EAF6),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth().height(56.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            Text("Continue with Google", color = PrimaryPurple, fontWeight = FontWeight.Bold)
-        }
-    }
+    Spacer(modifier = Modifier.height(24.dp))
 
-    Spacer(modifier = Modifier.height(32.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Already have an account? ", color = SecondaryText)
-        Text("Login", color = PrimaryPurple, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onLoginClick() })
+        Text("Already have an account? ", color = SecondaryText, fontSize = 14.sp)
+        Text("Login", color = PrimaryPurple, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.clickable { onLoginClick() })
     }
-    Spacer(modifier = Modifier.height(32.dp))
 }
 
 @Composable
@@ -459,33 +584,120 @@ fun AuthTextField(
     keyboardType: KeyboardType = KeyboardType.Text
 ) {
     var passwordVisible by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    
     Surface(
-        color = Color(0xFFF8FAFC),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
         shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-        modifier = Modifier.fillMaxWidth()
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { focusRequester.requestFocus() }
     ) {
-        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = Color(0xFF94A3B8), modifier = Modifier.size(20.dp))
-            Spacer(modifier = Modifier.width(12.dp))
+        Row(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = PrimaryPurple, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(10.dp))
             Box(modifier = Modifier.weight(1f)) {
-                if (value.isEmpty()) Text(label, color = Color(0xFF94A3B8), fontSize = 15.sp)
+                if (value.isEmpty()) Text(label, color = SecondaryText, fontSize = 14.sp)
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
                     enabled = enabled,
-                    textStyle = TextStyle(color = PrimaryText, fontSize = 15.sp),
+                    textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp),
                     cursorBrush = SolidColor(PrimaryPurple),
                     visualTransformation = if (isPassword && !passwordVisible) PasswordVisualTransformation() else VisualTransformation.None,
                     keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester)
                 )
             }
             if (isPassword) {
                 IconButton(onClick = { passwordVisible = !passwordVisible }, modifier = Modifier.size(20.dp)) {
-                    Icon(imageVector = if (passwordVisible) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff, contentDescription = null, tint = Color(0xFF94A3B8))
+                    Icon(imageVector = if (passwordVisible) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff, contentDescription = null, tint = SecondaryText)
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun AuthBackgroundCanvas(isDarkTheme: Boolean) {
+    val infiniteTransition = rememberInfiniteTransition(label = "authBackground")
+    
+    val pulseScale1 by infiniteTransition.animateFloat(
+        initialValue = 0.8f,
+        targetValue = 1.2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseScale1"
+    )
+
+    val pulseScale2 by infiniteTransition.animateFloat(
+        initialValue = 1.15f,
+        targetValue = 0.85f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(3800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseScale2"
+    )
+
+    val glowColor1 = PrimaryPurple.copy(alpha = if (isDarkTheme) 0.16f else 0.08f)
+    val glowColor2 = Color(0xFF7C4DFF).copy(alpha = if (isDarkTheme) 0.12f else 0.05f)
+    val glowColor3 = Color(0xFF00E5FF).copy(alpha = if (isDarkTheme) 0.06f else 0.03f)
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        // Top-Right Glowing Orb
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(glowColor1, Color.Transparent),
+                center = Offset(size.width * 0.85f, size.height * 0.15f),
+                radius = size.width * 0.7f * pulseScale1
+            ),
+            center = Offset(size.width * 0.85f, size.height * 0.15f),
+            radius = size.width * 0.7f * pulseScale1
+        )
+
+        // Bottom-Left Glowing Orb
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(glowColor2, Color.Transparent),
+                center = Offset(size.width * 0.15f, size.height * 0.82f),
+                radius = size.width * 0.8f * pulseScale2
+            ),
+            center = Offset(size.width * 0.15f, size.height * 0.82f),
+            radius = size.width * 0.8f * pulseScale2
+        )
+
+        // Center Ambient Accent Orb
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(glowColor3, Color.Transparent),
+                center = Offset(size.width * 0.5f, size.height * 0.45f),
+                radius = size.width * 0.5f * pulseScale1
+            ),
+            center = Offset(size.width * 0.5f, size.height * 0.45f),
+            radius = size.width * 0.5f * pulseScale1
+        )
+
+        // Geometric Dot Matrix Grid Overlay
+        val patternColor = (if (isDarkTheme) Color.White else Color(0xFF5B308C)).copy(alpha = 0.035f)
+        val step = 40.dp.toPx()
+        var x = 20.dp.toPx()
+        while (x < size.width) {
+            var y = 20.dp.toPx()
+            while (y < size.height) {
+                drawCircle(
+                    color = patternColor,
+                    radius = 1.5.dp.toPx(),
+                    center = Offset(x, y)
+                )
+                y += step
+            }
+            x += step
         }
     }
 }

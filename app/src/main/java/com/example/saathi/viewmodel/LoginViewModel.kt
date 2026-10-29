@@ -76,4 +76,12 @@ class LoginViewModel : ViewModel() {
     fun resetState() {
         _loginState.value = LoginState.Idle
     }
+
+    fun setSuccess() {
+        _loginState.value = LoginState.Success
+    }
+
+    fun setError(message: String) {
+        _loginState.value = LoginState.Error(message)
+    }
 }

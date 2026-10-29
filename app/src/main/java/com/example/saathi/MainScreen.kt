@@ -29,10 +29,13 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.saathi.screens.ChatScreen
 import com.example.saathi.screens.JourneyScreen
 import com.example.saathi.screens.SettingsScreen
+import com.example.saathi.screens.SmartMemoriesScreen
 import com.example.saathi.ui.theme.*
+import com.example.saathi.viewmodel.ChatViewModel
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 
@@ -49,6 +52,7 @@ fun MainScreen(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
+    val chatViewModel: ChatViewModel = viewModel()
 
     val items = listOf(
         NavigationItem.Chat,
@@ -65,7 +69,7 @@ fun MainScreen(
         NavigationItem.Chat.route -> "rahi"
         NavigationItem.Journey.route -> "Journey"
         NavigationItem.Settings.route -> "Profile"
-        else -> "Saathi"
+        else -> "Saarthi AI"
     }
 
     ModalNavigationDrawer(
@@ -221,14 +225,18 @@ fun MainScreen(
                 startDestination = NavigationItem.Chat.route,
                 modifier = Modifier.padding(innerPadding)
             ) {
-                composable(NavigationItem.Chat.route) { ChatScreen(isDarkTheme) }
+                composable(NavigationItem.Chat.route) { ChatScreen(isDarkTheme, chatViewModel) }
                 composable(NavigationItem.Journey.route) { JourneyScreen() }
                 composable(NavigationItem.Settings.route) { 
                     SettingsScreen(
                         onLogout = onLogout,
                         isDarkTheme = isDarkTheme,
-                        onThemeToggle = onThemeToggle
+                        onThemeToggle = onThemeToggle,
+                        onMemoriesClick = { navController.navigate(NavigationItem.SmartMemories.route) }
                     ) 
+                }
+                composable(NavigationItem.SmartMemories.route) {
+                    SmartMemoriesScreen(onBack = { navController.popBackStack() })
                 }
             }
         }
@@ -267,7 +275,7 @@ fun DrawerContent(onItemClick: (String) -> Unit, onLogoutClick: () -> Unit) {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "Saathi",
+                            text = "Saarthi AI",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface

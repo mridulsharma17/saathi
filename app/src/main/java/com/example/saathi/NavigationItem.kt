@@ -35,4 +35,11 @@ sealed class NavigationItem(
         selectedIcon = Icons.Filled.Person,
         unselectedIcon = Icons.Outlined.Person
     )
+
+    object SmartMemories : NavigationItem(
+        route = "smart_memories",
+        title = "Memories",
+        selectedIcon = Icons.Filled.Person, // We can use something else if needed
+        unselectedIcon = Icons.Outlined.Person
+    )
 }

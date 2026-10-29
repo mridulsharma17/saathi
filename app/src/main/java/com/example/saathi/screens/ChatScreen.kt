@@ -1,10 +1,12 @@
 package com.example.saathi.screens
 
 import android.util.Log
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,330 +18,523 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.saathi.ui.theme.*
 import com.example.saathi.data.JourneyMemory
 import com.example.saathi.data.JourneyRepository
-import com.example.saathi.data.MemoryDetector
+import com.example.saathi.viewmodel.ChatViewModel
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
-import java.util.concurrent.TimeUnit
 
 // Constants
 private const val TAG = "ChatScreen"
-
-private val UNIFIED_SYSTEM_PROMPT = """
-You are Rahi, a close Indian friend. You are witty, natural, and emotionally intelligent. 
-
-YOUR CORE IDENTITY:
-- Talk like a close Indian friend on WhatsApp. Use Hindi, Hinglish, or English naturally.
-- Be honest. Don't always agree. Give "truth bombs" when needed.
-- Be caring during hard times, celebrate wins, and tease lightly when appropriate.
-- Keep replies short (20-50 words) unless details are requested.
-
-YOUR TASK:
-You must process the current interaction and return ONLY a valid JSON object with three fields:
-1. "reply": Your natural conversational response to the user.
-2. "context": An updated rolling memory (200-300 words). Treat the previous context as the base and merge new facts. Preserve important events, goals, names, and unresolved topics. Do not store small talk.
-3. "journey": If an important life event occurred (milestones, career, relationships, achievements), set "save": true and provide details. Otherwise, set "save": false.
-
-OUTPUT FORMAT (JSON ONLY):
-{
-  "reply": "...",
-  "context": "...",
-  "journey": {
-    "save": true/false,
-    "category": "career/relationship/achievement/etc",
-    "title": "...",
-    "description": "...",
-    "importance": 1-10
-  }
-}
-""".trimIndent()
-
-private const val DEFAULT_CONTEXT = "No previous conversation context is available. Treat this as the beginning of a new conversation."
-
-private val httpClient = OkHttpClient.Builder()
-    .connectTimeout(15, TimeUnit.SECONDS)
-    .readTimeout(30, TimeUnit.SECONDS)
-    .writeTimeout(15, TimeUnit.SECONDS)
-    .build()
+private const val INITIAL_PAGE_SIZE = 25
+private const val PAGE_INCREMENT = 25
 
 data class ChatMessage(
     val id: String = "",
     val senderId: String = "",
     val text: String = "",
     val timestamp: Long = 0,
-    val replyToId: String? = null
-)
-
-data class UnifiedAiResponse(
-    val reply: String,
-    val context: String,
-    val journey: JourneyMemory?,
-    val keyUsed: String
+    val replyToId: String? = null,
+    val journeyTitle: String? = null,
+    val journeyImportance: Int? = null
 )
 
 @Composable
-fun ChatScreen(isDarkTheme: Boolean) {
+fun ChatScreen(
+    isDarkTheme: Boolean,
+    chatViewModel: ChatViewModel = viewModel()
+) {
     val auth = FirebaseAuth.getInstance()
     val userId = auth.currentUser?.uid ?: return
     val database = FirebaseDatabase.getInstance("https://saathi-5f51d-default-rtdb.firebaseio.com/")
     val chatRef = database.getReference("chats").child(userId)
-    val contextRef = database.getReference("conversation_context").child(userId)
-    val journeyRepo = remember { JourneyRepository() }
-    val memoryDetector = remember { MemoryDetector(database) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val localChatRepo = remember { com.example.saathi.data.LocalChatRepository(context) }
     
     var messages by remember { mutableStateOf(listOf<ChatMessage>()) }
     var inputText by remember { mutableStateOf("") }
-    var showMemoryDialog by remember { mutableStateOf(false) }
-    var detectedMemory by remember { mutableStateOf<JourneyMemory?>(null) }
+
+    val isAiThinking by chatViewModel.isAiThinking.collectAsState()
+    val messageEvent by chatViewModel.messageEvent.collectAsState()
     
-    // Message Queue System
-    val messageQueue = remember { Channel<ChatMessage>(Channel.UNLIMITED) }
+    // Pagination & State
+    var messageLimit by remember { mutableIntStateOf(INITIAL_PAGE_SIZE) }
+    var hasMoreMessages by remember { mutableStateOf(false) }
+    var isLoadingOlder by remember { mutableStateOf(false) }
+    
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    // Observe Chat Messages from Firebase
-    DisposableEffect(userId) {
+    // Refresh Local + Cloud messages whenever ChatViewModel saves a new message
+    LaunchedEffect(messageEvent) {
+        if (messageEvent > 0L) {
+            val localList = localChatRepo.getLocalMessages(userId)
+            val combined = (messages + localList).distinctBy { msg ->
+                if (msg.id.isNotEmpty()) msg.id else "${msg.timestamp}_${msg.text}"
+            }.sortedBy { it.timestamp }
+            messages = combined
+        }
+    }
+
+    // Observe Chat Messages from Firebase + Local Storage with Pagination
+    DisposableEffect(userId, messageLimit) {
+        val query = chatRef.orderByChild("timestamp").limitToLast(messageLimit)
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val newList = mutableListOf<ChatMessage>()
+                val cloudList = mutableListOf<ChatMessage>()
                 snapshot.children.forEach { child ->
                     val msg = child.getValue(ChatMessage::class.java)?.copy(id = child.key ?: "")
-                    if (msg != null) newList.add(msg)
+                    if (msg != null) cloudList.add(msg)
                 }
-                messages = newList.sortedBy { it.timestamp }
+                
+                val localList = localChatRepo.getLocalMessages(userId)
+                val combined = (cloudList + localList).distinctBy { msg ->
+                    if (msg.id.isNotEmpty()) msg.id else "${msg.timestamp}_${msg.text}"
+                }.sortedBy { it.timestamp }
+                
+                messages = combined
+                hasMoreMessages = snapshot.childrenCount.toInt() >= messageLimit
+                isLoadingOlder = false
             }
+
             override fun onCancelled(error: DatabaseError) {
                 Log.e(TAG, "Error fetching chats", error.toException())
+                val localList = localChatRepo.getLocalMessages(userId).sortedBy { it.timestamp }
+                messages = localList
+                isLoadingOlder = false
             }
         }
-        chatRef.addValueEventListener(listener)
-        onDispose { chatRef.removeEventListener(listener) }
+        query.addValueEventListener(listener)
+        onDispose { query.removeEventListener(listener) }
     }
 
-    // Queue Processor
-    LaunchedEffect(userId) {
-        messageQueue.receiveAsFlow().collect { userMsg ->
-            try {
-                val contextSnapshot = contextRef.get().await()
-                val currentContext = contextSnapshot.value?.toString() ?: DEFAULT_CONTEXT
-                val response = getUnifiedAiResponse(database, userMsg.text, currentContext)
-                
-                val botMsg = ChatMessage(
-                    senderId = "rahi",
-                    text = response.reply,
-                    timestamp = System.currentTimeMillis(),
-                    replyToId = userMsg.id
-                )
-                chatRef.push().setValue(botMsg).await()
-                contextRef.setValue(response.context).await()
-                
-                if (response.journey != null) {
-                    detectedMemory = response.journey.copy(sourceMessage = userMsg.text)
-                    showMemoryDialog = true
+    // Pagination Scroll Listener: Load older messages when user reaches top
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .collect { firstIndex ->
+                if (firstIndex <= 1 && hasMoreMessages && !isLoadingOlder && messages.size >= messageLimit) {
+                    isLoadingOlder = true
+                    messageLimit += PAGE_INCREMENT
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Queue processing error", e)
             }
-        }
     }
 
+    // Scroll to bottom on new message send
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
+        if (messages.isNotEmpty() && !isLoadingOlder) {
             listState.animateScrollToItem(messages.size - 1)
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .navigationBarsPadding()
-            .imePadding()
-    ) {
-        LazyColumn(
-            state = listState,
+    ChatBackground(isDarkTheme = isDarkTheme) {
+        Column(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp)
+                .fillMaxSize()
+                .navigationBarsPadding()
+                .imePadding()
         ) {
-            items(messages) { message ->
-                ChatBubble(
-                    message = message,
-                    isFromMe = message.senderId == userId,
-                    allMessages = messages
-                )
-            }
-        }
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                if (messages.isEmpty() && !isAiThinking) {
+                    // Polished Empty State Banner with Quick Suggestion Chips
+                    ChatEmptyState(onSuggestionClick = { prompt ->
+                        inputText = prompt
+                    })
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp)
+                    ) {
+                        // Top loading indicator when pulling older messages
+                        if (isLoadingOlder) {
+                            item {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        color = PrimaryPurple,
+                                        strokeWidth = 2.dp
+                                    )
+                                }
+                            }
+                        }
 
-        ChatInput(
-            value = inputText,
-            onValueChange = { inputText = it },
-            onSend = {
-                val trimmedText = inputText.trim()
-                if (trimmedText.isNotBlank()) {
-                    inputText = ""
-                    scope.launch {
-                        try {
-                            val newRef = chatRef.push()
-                            val userMsg = ChatMessage(
-                                id = newRef.key ?: "",
-                                senderId = userId,
-                                text = trimmedText,
-                                timestamp = System.currentTimeMillis()
+                        // Render Messages with Date Section Headers
+                        itemsIndexed(
+                            items = messages,
+                            key = { _, msg -> msg.id.ifEmpty { msg.timestamp.toString() } }
+                        ) { index, message ->
+                            val showDateHeader = index == 0 || !isSameDay(messages[index].timestamp, messages[index - 1].timestamp)
+                            if (showDateHeader) {
+                                DateHeaderItem(timestamp = message.timestamp)
+                            }
+
+                            ChatBubble(
+                                message = message,
+                                isFromMe = message.senderId == userId,
+                                allMessages = messages
                             )
-                            newRef.setValue(userMsg).await()
-                            messageQueue.send(userMsg)
-                        } catch (e: Exception) { }
+                        }
+
+                        // Typing / Thinking Indicator
+                        if (isAiThinking) {
+                            item {
+                                RahiTypingBubble()
+                            }
+                        }
                     }
                 }
             }
-        )
 
-        if (showMemoryDialog && detectedMemory != null) {
-            AlertDialog(
-                onDismissRequest = { showMemoryDialog = false },
-                title = { Text("We found an important memory", color = MaterialTheme.colorScheme.onSurface) },
-                text = {
-                    Column {
-                        Text(detectedMemory?.title ?: "", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(detectedMemory?.description ?: "", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
+            // Clean Modern Chat Input Bar
+            ChatInput(
+                value = inputText,
+                onValueChange = { inputText = it },
+                onSend = {
+                    val trimmedText = inputText.trim()
+                    if (trimmedText.isNotBlank()) {
+                        inputText = ""
                         scope.launch {
-                            detectedMemory?.let { journeyRepo.saveJourneyMemory(userId, it) }
-                            showMemoryDialog = false
+                            try {
+                                val storageMode = localChatRepo.getStorageMode()
+                                val newRef = chatRef.push()
+                                val msgId = if (storageMode == "cloud") newRef.key ?: UUID.randomUUID().toString() else "local_" + System.currentTimeMillis()
+                                val userMsg = ChatMessage(
+                                    id = msgId,
+                                    senderId = userId,
+                                    text = trimmedText,
+                                    timestamp = System.currentTimeMillis()
+                                )
+                                
+                                localChatRepo.saveLastUserTextTime(userId, userMsg.timestamp)
+                                
+                                if (storageMode == "cloud") {
+                                    newRef.setValue(userMsg).await()
+                                } else {
+                                    localChatRepo.saveLocalMessage(userId, userMsg)
+                                    val cloudList = messages.filter { !it.id.startsWith("local_") }
+                                    val localList = localChatRepo.getLocalMessages(userId)
+                                    messages = (cloudList + localList).distinctBy { msg ->
+                                        if (msg.id.isNotEmpty()) msg.id else "${msg.timestamp}_${msg.text}"
+                                    }.sortedBy { it.timestamp }
+                                }
+                                
+                                chatViewModel.sendMessage(userId, userMsg, storageMode, localChatRepo)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error sending message", e)
+                            }
                         }
-                    }) {
-                        Text("Save", color = PrimaryPurple)
                     }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showMemoryDialog = false }) {
-                        Text("Dismiss", color = Color.Gray)
-                    }
-                },
-                containerColor = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(28.dp)
+                }
             )
         }
     }
 }
 
-private suspend fun getUnifiedAiResponse(database: FirebaseDatabase, prompt: String, context: String): UnifiedAiResponse {
-    val snapshot = try {
-        database.getReference("api_keys").get().await()
-    } catch (e: Exception) {
-        return UnifiedAiResponse("System busy.", context, null, "none")
+@Composable
+fun ChatBackground(
+    isDarkTheme: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "bgPulse")
+    
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.85f,
+        targetValue = 1.15f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseScale"
+    )
+
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.04f,
+        targetValue = 0.09f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(3500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
+
+    val bgGradient = if (isDarkTheme) {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF0D0B18),
+                Color(0xFF161227),
+                Color(0xFF0D0B18)
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFFFAF8FF),
+                Color(0xFFF3EDFC),
+                Color(0xFFFAF8FF)
+            )
+        )
     }
 
-    val keysToTry = listOf("gemni_1", "gemni_2", "gemni_3", "grok_1", "grok_2", "grok_3")
-    val fullInput = "Current Memory: $context\n\nUser Message: $prompt"
+    val glowColor1 = PrimaryPurple.copy(alpha = if (isDarkTheme) pulseAlpha else pulseAlpha * 0.5f)
+    val glowColor2 = Color(0xFF7C4DFF).copy(alpha = if (isDarkTheme) pulseAlpha * 0.8f else pulseAlpha * 0.4f)
 
-    for (keyName in keysToTry) {
-        val apiKey = snapshot.child(keyName).value?.toString() ?: continue
-        val rawResponse = if (keyName.contains("gemni")) callGeminiUnified(apiKey, fullInput) else callOpenRouterUnified(apiKey, fullInput)
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(bgGradient)
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(glowColor1, Color.Transparent),
+                    center = Offset(size.width * 0.85f, size.height * 0.15f),
+                    radius = size.width * 0.65f * pulseScale
+                ),
+                center = Offset(size.width * 0.85f, size.height * 0.15f),
+                radius = size.width * 0.65f * pulseScale
+            )
 
-        if (rawResponse != null) {
-            try {
-                val start = rawResponse.indexOf('{')
-                val end = rawResponse.lastIndexOf('}')
-                val jsonStr = if (start != -1 && end != -1) rawResponse.substring(start, end + 1) else rawResponse
-                val json = JSONObject(jsonStr)
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(glowColor2, Color.Transparent),
+                    center = Offset(size.width * 0.15f, size.height * 0.75f),
+                    radius = size.width * 0.75f * pulseScale
+                ),
+                center = Offset(size.width * 0.15f, size.height * 0.75f),
+                radius = size.width * 0.75f * pulseScale
+            )
 
-                val journey = if (json.optJSONObject("journey")?.optBoolean("save") == true) {
-                    val jObj = json.getJSONObject("journey")
-                    JourneyMemory(
-                        title = jObj.getString("title"),
-                        description = jObj.getString("description"),
-                        category = jObj.getString("category"),
-                        importance = jObj.getInt("importance"),
-                        createdAt = System.currentTimeMillis()
+            val patternColor = (if (isDarkTheme) Color.White else Color(0xFF5B308C)).copy(alpha = 0.035f)
+            val step = 44.dp.toPx()
+            var x = 22.dp.toPx()
+            while (x < size.width) {
+                var y = 22.dp.toPx()
+                while (y < size.height) {
+                    drawCircle(
+                        color = patternColor,
+                        radius = 1.5.dp.toPx(),
+                        center = Offset(x, y)
                     )
-                } else null
+                    y += step
+                }
+                x += step
+            }
+        }
 
-                return UnifiedAiResponse(
-                    reply = json.getString("reply"),
-                    context = json.getString("context"),
-                    journey = journey,
-                    keyUsed = keyName
+        content()
+    }
+}
+
+@Composable
+fun DateHeaderItem(timestamp: Long) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text(
+                text = formatDateHeader(timestamp),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun RahiTypingBubble() {
+    val infiniteTransition = rememberInfiniteTransition(label = "typing")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "alpha"
+    )
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start,
+        verticalAlignment = Alignment.Bottom
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(PrimaryPurple.copy(alpha = 0.3f), PrimaryPurple.copy(alpha = 0.1f))
+                    )
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("✨", fontSize = 16.sp)
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+            shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomEnd = 18.dp, bottomStart = 4.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Rahi is typing",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    fontWeight = FontWeight.Medium
                 )
-            } catch (e: Exception) { }
-        }
-    }
-    return UnifiedAiResponse("All systems busy. Try again?", context, null, "none")
-}
-
-private suspend fun callGeminiUnified(apiKey: String, input: String): String? {
-    return withContext(Dispatchers.IO) {
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
-        val json = JSONObject().apply {
-            put("system_instruction", JSONObject().apply {
-                put("parts", org.json.JSONArray().apply { put(JSONObject().apply { put("text", UNIFIED_SYSTEM_PROMPT) }) })
-            })
-            put("contents", org.json.JSONArray().apply {
-                put(JSONObject().apply { put("parts", org.json.JSONArray().apply { put(JSONObject().apply { put("text", input) }) }) })
-            })
-        }
-        try {
-            val request = Request.Builder().url(url).post(json.toString().toRequestBody("application/json".toMediaType())).build()
-            httpClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val body = response.body?.string() ?: ""
-                    JSONObject(body).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
-                } else null
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "•••",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = PrimaryPurple.copy(alpha = alpha)
+                )
             }
-        } catch (e: Exception) { null }
+        }
     }
 }
 
-private suspend fun callOpenRouterUnified(apiKey: String, input: String): String? {
-    return withContext(Dispatchers.IO) {
-        val url = "https://openrouter.ai/api/v1/chat/completions"
-        val json = JSONObject().apply {
-            put("model", "openrouter/free")
-            put("messages", org.json.JSONArray().apply {
-                put(JSONObject().apply { put("role", "system"); put("content", UNIFIED_SYSTEM_PROMPT) })
-                put(JSONObject().apply { put("role", "user"); put("content", input) })
-            })
+@Composable
+fun ChatEmptyState(onSuggestionClick: (String) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(PrimaryPurple.copy(alpha = 0.2f), PrimaryPurple.copy(alpha = 0.05f))
+                    )
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("✨", fontSize = 36.sp)
         }
-        try {
-            val request = Request.Builder().url(url).header("Authorization", "Bearer $apiKey").post(json.toString().toRequestBody("application/json".toMediaType())).build()
-            httpClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val body = response.body?.string() ?: ""
-                    JSONObject(body).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content")
-                } else null
+        
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Meet Rahi 👋",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = "Your witty, supportive AI companion. Ask anything or share what's on your mind!",
+            style = MaterialTheme.typography.bodyMedium,
+            color = SecondaryText,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        Text(
+            text = "Try asking:",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = SecondaryText
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        val suggestions = listOf(
+            "How was your day? 😊",
+            "Give me a quick daily boost 🚀",
+            "Let's talk about my goals 🎯",
+            "Tell me something interesting 💡"
+        )
+
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            suggestions.forEach { prompt ->
+                Surface(
+                    onClick = { onSuggestionClick(prompt) },
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                ) {
+                    Text(
+                        text = prompt,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
             }
-        } catch (e: Exception) { null }
+        }
     }
+}
+
+private fun formatDateHeader(timestamp: Long): String {
+    val messageCal = Calendar.getInstance().apply { timeInMillis = timestamp }
+    val nowCal = Calendar.getInstance()
+    
+    return when {
+        isSameDay(timestamp, System.currentTimeMillis()) -> "Today"
+        isYesterday(messageCal, nowCal) -> "Yesterday"
+        else -> SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).format(Date(timestamp))
+    }
+}
+
+private fun isSameDay(t1: Long, t2: Long): Boolean {
+    val c1 = Calendar.getInstance().apply { timeInMillis = t1 }
+    val c2 = Calendar.getInstance().apply { timeInMillis = t2 }
+    return c1.get(Calendar.YEAR) == c2.get(Calendar.YEAR) &&
+            c1.get(Calendar.DAY_OF_YEAR) == c2.get(Calendar.DAY_OF_YEAR)
+}
+
+private fun isYesterday(messageCal: Calendar, nowCal: Calendar): Boolean {
+    val yesterday = (nowCal.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -1) }
+    return messageCal.get(Calendar.YEAR) == yesterday.get(Calendar.YEAR) &&
+            messageCal.get(Calendar.DAY_OF_YEAR) == yesterday.get(Calendar.DAY_OF_YEAR)
 }
 
 @Composable
@@ -350,7 +545,13 @@ fun ChatBubble(
 ) {
     val isDarkTheme = MaterialTheme.colorScheme.background != LightBackground
     val repliedToMessage = message.replyToId?.let { id -> allMessages.find { it.id == id } }
+    val screenWidth = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
+    val maxBubbleWidth = screenWidth * 0.70f
     
+    val formattedTime = remember(message.timestamp) {
+        SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(message.timestamp))
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isFromMe) Arrangement.End else Arrangement.Start,
@@ -359,20 +560,24 @@ fun ChatBubble(
         if (!isFromMe) {
             Box(
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(32.dp)
                     .clip(CircleShape)
-                    .background(PrimaryPurple.copy(alpha = 0.1f)), 
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(PrimaryPurple.copy(alpha = 0.3f), PrimaryPurple.copy(alpha = 0.1f))
+                        )
+                    ), 
                 contentAlignment = Alignment.Center
             ) {
-                Text("\u2728", fontSize = 18.sp)
+                Text("✨", fontSize = 16.sp)
             }
             Spacer(modifier = Modifier.width(8.dp))
         }
         
         Column(
-            horizontalAlignment = if (isFromMe) Alignment.End else Alignment.Start
+            horizontalAlignment = if (isFromMe) Alignment.End else Alignment.Start,
+            modifier = Modifier.widthIn(max = maxBubbleWidth)
         ) {
-            // "Replying to" context
             val showTag = remember(message, allMessages) {
                 if (isFromMe || message.replyToId == null) false
                 else {
@@ -391,7 +596,7 @@ fun ChatBubble(
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.padding(bottom = 4.dp).widthIn(max = 240.dp)
+                    modifier = Modifier.padding(bottom = 4.dp).widthIn(max = maxBubbleWidth)
                 ) {
                     Text(
                         text = repliedToMessage.text,
@@ -404,27 +609,72 @@ fun ChatBubble(
             }
 
             Surface(
-                color = if (isFromMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                color = if (isFromMe) PrimaryPurple else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
                 shape = RoundedCornerShape(
-                    topStart = 20.dp, 
-                    topEnd = 20.dp, 
-                    bottomStart = if (isFromMe) 20.dp else 4.dp, 
-                    bottomEnd = if (isFromMe) 4.dp else 20.dp
+                    topStart = 18.dp, 
+                    topEnd = 18.dp, 
+                    bottomStart = if (isFromMe) 18.dp else 4.dp, 
+                    bottomEnd = if (isFromMe) 4.dp else 18.dp
                 ),
                 shadowElevation = if (isDarkTheme) 0.dp else 0.5.dp
             ) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Column(
+                    modifier = Modifier.padding(start = 12.dp, end = 10.dp, top = 7.dp, bottom = 6.dp)
+                ) {
                     Text(
                         text = message.text, 
                         color = if (isFromMe) Color.White else MaterialTheme.colorScheme.onSurface, 
                         fontSize = 15.sp,
-                        lineHeight = 22.sp
+                        lineHeight = 20.sp
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+
+                    if (message.journeyTitle != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Surface(
+                            color = Color(0xFFFFF8E1),
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFB300).copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = "🌟 Journey Milestone",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFE65100)
+                                    )
+                                    if (message.journeyImportance != null) {
+                                        Text(
+                                            text = "⭐ ${message.journeyImportance}/10",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFE65100)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "\"${message.journeyTitle}\"",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFFBF360C)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(message.timestamp)), 
-                        color = (if (isFromMe) Color.White else MaterialTheme.colorScheme.onSurface).copy(alpha = 0.5f), 
-                        fontSize = 11.sp, 
+                        text = formattedTime, 
+                        color = (if (isFromMe) Color.White else MaterialTheme.colorScheme.onSurface).copy(alpha = 0.6f), 
+                        fontSize = 10.sp, 
                         modifier = Modifier.align(Alignment.End)
                     )
                 }
@@ -436,14 +686,13 @@ fun ChatBubble(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatInput(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit) {
-    val isDarkTheme = MaterialTheme.colorScheme.background != LightBackground
     Surface(
-        color = MaterialTheme.colorScheme.background, 
+        color = Color.Transparent, 
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = 10.dp)
                 .fillMaxWidth(), 
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -459,12 +708,14 @@ fun ChatInput(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit
                 Icon(
                     Icons.Default.Add, 
                     contentDescription = "Add", 
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = PrimaryPurple
                 )
             }
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            
             TextField(
-                value = value, onValueChange = onValueChange,
+                value = value,
+                onValueChange = onValueChange,
                 placeholder = { Text("Message Rahi...", color = SecondaryText, fontSize = 15.sp) },
                 modifier = Modifier
                     .weight(1f)
@@ -474,20 +725,30 @@ fun ChatInput(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit
                     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), 
                     focusedIndicatorColor = Color.Transparent, 
                     unfocusedIndicatorColor = Color.Transparent, 
-                    cursorColor = MaterialTheme.colorScheme.primary,
+                    cursorColor = PrimaryPurple,
                     focusedTextColor = MaterialTheme.colorScheme.onSurface, 
                     unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                 ),
                 shape = RoundedCornerShape(28.dp)
             )
-            Spacer(modifier = Modifier.width(12.dp))
+            
+            Spacer(modifier = Modifier.width(10.dp))
+            
             IconButton(
                 onClick = onSend, 
+                enabled = value.isNotBlank(),
                 modifier = Modifier
-                    .size(48.dp)
-                    .background(PrimaryPurple, CircleShape)
+                    .size(46.dp)
+                    .background(
+                        if (value.isNotBlank()) PrimaryPurple else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        CircleShape
+                    )
             ) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = Color.White)
+                Icon(
+                    Icons.AutoMirrored.Filled.Send, 
+                    contentDescription = "Send", 
+                    tint = if (value.isNotBlank()) Color.White else SecondaryText
+                )
             }
         }
     }
